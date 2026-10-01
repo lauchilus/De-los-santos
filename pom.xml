@@ -11,8 +11,8 @@
 	<groupId>com.agua</groupId>
 	<artifactId>agua-backend</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<name/>
-	<description/>
+	<name>agua-backend</name>
+	<description>Sistema de stock y reparto de agua</description>
 	<url/>
 	<licenses>
 		<license/>
