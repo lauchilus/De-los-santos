@@ -104,6 +104,16 @@ public class SecurityConfig {
                                 "/api/v1/jornadas/*/stock"
                         ).hasAnyRole("ADMIN", "REPARTIDOR")
 
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                "/api/v1/jornadas/*/entregas"
+                        ).hasAnyRole("ADMIN", "REPARTIDOR")
+
+                        .requestMatchers(
+                                HttpMethod.GET,
+                                "/api/v1/jornadas/*/entregas/*"
+                        ).hasAnyRole("ADMIN", "REPARTIDOR")
+
                         .anyRequest().denyAll()
                 )
                 .httpBasic(Customizer.withDefaults());
