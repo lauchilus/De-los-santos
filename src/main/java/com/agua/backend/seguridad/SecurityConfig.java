@@ -83,6 +83,11 @@ public class SecurityConfig {
                                 "/api/v1/camionetas/**"
                         ).hasAnyRole("ADMIN", "REPARTIDOR")
 
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                "/api/v1/jornadas"
+                        ).hasAnyRole("ADMIN", "REPARTIDOR")
+
                         .anyRequest().denyAll()
                 )
                 .httpBasic(Customizer.withDefaults());
