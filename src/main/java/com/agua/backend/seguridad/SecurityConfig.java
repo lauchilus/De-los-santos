@@ -77,6 +77,12 @@ public class SecurityConfig {
                                 "/api/v1/stock/fabrica"
                         ).hasAnyRole("ADMIN", "REPARTIDOR")
 
+                        .requestMatchers(
+                                HttpMethod.GET,
+                                "/api/v1/camionetas",
+                                "/api/v1/camionetas/**"
+                        ).hasAnyRole("ADMIN", "REPARTIDOR")
+
                         .anyRequest().denyAll()
                 )
                 .httpBasic(Customizer.withDefaults());
