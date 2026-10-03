@@ -86,26 +86,39 @@ public class CobroService {
 
     public CajaJornadaResponse caja(UUID jornadaId, String username) {
         jornadas.obtener(jornadaId, username);
-        // Una sola consulta ofrece un resumen consistente, incluso mientras ingresan cobros.
-        // No se suma cobros.total en este JOIN: se duplicaría en los pagos mixtos.
+        // Agrega ingresos y egresos por separado para no multiplicar importes al unirlos.
         return jdbc.queryForObject("""
+                WITH ingresos AS (
+                    SELECT COALESCE(SUM(CASE WHEN p.medio = 'EFECTIVO' THEN p.importe ELSE 0 END), 0) AS efectivo,
+                           COALESCE(SUM(CASE WHEN p.medio = 'TRANSFERENCIA' THEN p.importe ELSE 0 END), 0) AS transferencia,
+                           COALESCE(SUM(CASE WHEN p.medio = 'MERCADO_PAGO' THEN p.importe ELSE 0 END), 0) AS mercado_pago
+                    FROM cobros c JOIN pagos_cobro p ON p.cobro_id = c.id WHERE c.jornada_id = ?
+                ), egresos AS (
+                    SELECT COALESCE(SUM(CASE WHEN medio = 'EFECTIVO' THEN importe ELSE 0 END), 0) AS efectivo,
+                           COALESCE(SUM(CASE WHEN medio = 'TRANSFERENCIA' THEN importe ELSE 0 END), 0) AS transferencia,
+                           COALESCE(SUM(CASE WHEN medio = 'MERCADO_PAGO' THEN importe ELSE 0 END), 0) AS mercado_pago
+                    FROM gastos WHERE jornada_id = ?
+                )
                 SELECT j.id, j.estado, j.efectivo_inicial,
-                       COALESCE(SUM(CASE WHEN p.medio = 'EFECTIVO' THEN p.importe ELSE 0 END), 0) AS efectivo,
-                       COALESCE(SUM(CASE WHEN p.medio = 'TRANSFERENCIA' THEN p.importe ELSE 0 END), 0) AS transferencia,
-                       COALESCE(SUM(CASE WHEN p.medio = 'MERCADO_PAGO' THEN p.importe ELSE 0 END), 0) AS mercado_pago
-                FROM jornadas j
-                LEFT JOIN cobros c ON c.jornada_id = j.id
-                LEFT JOIN pagos_cobro p ON p.cobro_id = c.id
-                WHERE j.id = ? GROUP BY j.id, j.estado, j.efectivo_inicial
+                       i.efectivo, i.transferencia, i.mercado_pago,
+                       e.efectivo AS egreso_efectivo, e.transferencia AS egreso_transferencia,
+                       e.mercado_pago AS egreso_mercado_pago
+                FROM jornadas j CROSS JOIN ingresos i CROSS JOIN egresos e WHERE j.id = ?
                 """, (rs, fila) -> {
                     BigDecimal inicial = rs.getBigDecimal("efectivo_inicial");
                     BigDecimal efectivo = rs.getBigDecimal("efectivo");
                     BigDecimal transferencia = rs.getBigDecimal("transferencia");
                     BigDecimal mercadoPago = rs.getBigDecimal("mercado_pago");
+                    BigDecimal egresoEfectivo = rs.getBigDecimal("egreso_efectivo");
+                    BigDecimal egresoTransferencia = rs.getBigDecimal("egreso_transferencia");
+                    BigDecimal egresoMercadoPago = rs.getBigDecimal("egreso_mercado_pago");
                     return new CajaJornadaResponse(rs.getObject("id", UUID.class), rs.getString("estado"),
                             inicial, efectivo, transferencia, mercadoPago,
-                            efectivo.add(transferencia).add(mercadoPago), inicial.add(efectivo));
-                }, jornadaId);
+                            efectivo.add(transferencia).add(mercadoPago),
+                            egresoEfectivo, egresoTransferencia, egresoMercadoPago,
+                            egresoEfectivo.add(egresoTransferencia).add(egresoMercadoPago),
+                            inicial.add(efectivo).subtract(egresoEfectivo));
+                }, jornadaId, jornadaId, jornadaId);
     }
 
     private List<CobroResponse.Pago> validarYOrdenar(CrearCobroRequest request) {

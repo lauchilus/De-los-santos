@@ -11,5 +11,9 @@ public record CajaJornadaResponse(
         BigDecimal ingresosTransferencia,
         BigDecimal ingresosMercadoPago,
         BigDecimal totalCobrado,
+        BigDecimal egresosEfectivo,
+        BigDecimal egresosTransferencia,
+        BigDecimal egresosMercadoPago,
+        BigDecimal totalGastado,
         BigDecimal efectivoEsperado
 ) {}

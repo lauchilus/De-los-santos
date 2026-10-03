@@ -60,7 +60,8 @@ class CargaServicePostgresTest {
         jdbc = new JdbcTemplate(ds);
         var recursos = new PathMatchingResourcePatternResolver()
                 .getResources("classpath:db/migration/V*.sql");
-        Arrays.sort(recursos, Comparator.comparing(r -> r.getFilename()));
+        Arrays.sort(recursos, Comparator.comparingInt(r ->
+                Integer.parseInt(r.getFilename().substring(1, r.getFilename().indexOf("__")))));
         try (var connection = ds.getConnection()) {
             for (var recurso : recursos) ScriptUtils.executeSqlScript(connection, recurso);
         }
