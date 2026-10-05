@@ -137,6 +137,17 @@ public class SecurityConfig {
                                 "/api/v1/jornadas/*/gastos"
                         ).hasAnyRole("ADMIN", "REPARTIDOR")
 
+                        .requestMatchers(
+                                HttpMethod.GET,
+                                "/api/v1/jornadas/*/cierre",
+                                "/api/v1/jornadas/*/cierre/previa"
+                        ).hasAnyRole("ADMIN", "REPARTIDOR")
+
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                "/api/v1/jornadas/*/cierre"
+                        ).hasAnyRole("ADMIN", "REPARTIDOR")
+
                         .anyRequest().denyAll()
                 )
                 .httpBasic(Customizer.withDefaults());
