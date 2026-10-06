@@ -1,6 +1,9 @@
 package com.agua.backend.entrega;
 
 import com.agua.backend.jornada.JornadaService;
+import com.agua.backend.abono.AbonoService;
+import com.agua.backend.abono.PrecioClienteService;
+import java.time.LocalDate;
 import com.agua.backend.usuario.Usuario;
 import com.agua.backend.usuario.UsuarioRepository;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +29,8 @@ public class EntregaService {
     private final JdbcTemplate jdbc;
     private final JornadaService jornadas;
     private final UsuarioRepository usuarios;
+    private final AbonoService abonos;
+    private final PrecioClienteService preciosCliente;
 
     @Transactional
     public EntregaResponse registrar(UUID jornadaId, CrearEntregaRequest request, String username) {
@@ -33,12 +38,12 @@ public class EntregaService {
         Usuario actor = actor(username);
         var items = validarYOrdenar(request);
         var existente = buscar(request.operacionId());
-        if (existente != null) return validarReintento(existente, jornadaId, request.clienteId(), actor.getId(), items);
+        if (existente != null) return validarReintento(existente, jornadaId, request.clienteId(), actor.getId(), items, request.abono());
 
         // Mismo bloqueo que cargas y futuro cierre: una operación por jornada a la vez.
         String estado = jdbc.queryForObject("SELECT estado FROM jornadas WHERE id = ? FOR UPDATE", String.class, jornadaId);
         existente = buscar(request.operacionId());
-        if (existente != null) return validarReintento(existente, jornadaId, request.clienteId(), actor.getId(), items);
+        if (existente != null) return validarReintento(existente, jornadaId, request.clienteId(), actor.getId(), items, request.abono());
         if (!"ABIERTA".equals(estado)) throw error(HttpStatus.CONFLICT, "La jornada está cerrada");
 
         // Serializa tenencia y cuenta incluso si dos jornadas atienden al mismo cliente.
@@ -51,12 +56,14 @@ public class EntregaService {
                 VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING
                 """, request.operacionId(), jornadaId, request.clienteId(), actor.getId());
         if (insertados == 0) {
-            return validarReintento(buscar(request.operacionId()), jornadaId, request.clienteId(), actor.getId(), items);
+            return validarReintento(buscar(request.operacionId()), jornadaId, request.clienteId(), actor.getId(), items, request.abono());
         }
 
-        BigDecimal total = BigDecimal.ZERO;
+        LocalDate hoy = jdbc.queryForObject("SELECT CAST(creado_en AT TIME ZONE 'America/Argentina/Buenos_Aires' AS DATE) FROM entregas WHERE id=?",
+                LocalDate.class, request.operacionId());
+        BigDecimal total = abonos.cargar(request.operacionId(), request.clienteId(), request.abono(), hoy);
         for (var item : items) {
-            total = total.add(procesarItem(request.operacionId(), jornadaId, request.clienteId(), item));
+            total = total.add(procesarItem(request.operacionId(), jornadaId, request.clienteId(), item, hoy));
         }
         BigDecimal saldo = jdbc.queryForObject("""
                 INSERT INTO cuentas_clientes (cliente_id, saldo) VALUES (?, ?)
@@ -100,7 +107,7 @@ public class EntregaService {
         return new SituacionClienteResponse(clienteId, saldos.getFirst(), envases);
     }
 
-    private BigDecimal procesarItem(UUID entregaId, UUID jornadaId, UUID clienteId, CrearEntregaRequest.Item item) {
+    private BigDecimal procesarItem(UUID entregaId, UUID jornadaId, UUID clienteId, CrearEntregaRequest.Item item, LocalDate hoy) {
         // Conserva el precio/version usados; un cambio posterior no altera entregas ya confirmadas.
         var productos = jdbc.query("""
                 SELECT codigo, tipo, activo, precio_venta, version FROM productos WHERE id = ? FOR SHARE
@@ -111,15 +118,28 @@ public class EntregaService {
         if (!"BIDON".equals(producto.tipo())) throw error(HttpStatus.BAD_REQUEST, "Esta operación admite solo bidones");
         if (!producto.activo()) throw error(HttpStatus.CONFLICT, "Producto inactivo: " + producto.codigo());
 
+        int incluidos = abonos.consumir(entregaId, clienteId, item.productoId(), item.entregados(), hoy);
+        int facturados = item.entregados() - incluidos;
         BigDecimal precio = null;
+        BigDecimal precioCliente = null;
         BigDecimal subtotal = BigDecimal.ZERO;
+        String origen = "SIN_CARGO";
         if (item.entregados() > 0) {
-            if (producto.precio() == null) throw error(HttpStatus.CONFLICT, "Precio sin configurar: " + producto.codigo());
             if (!Objects.equals(item.precioVersion(), producto.version())) {
-                throw error(HttpStatus.CONFLICT, "El precio cambió: consultá el producto antes de confirmar la entrega");
+                throw error(HttpStatus.CONFLICT, "El precio general cambió: consultá el producto");
             }
+            var especial = preciosCliente.actual(clienteId, item.productoId());
+            if (!Objects.equals(item.precioClienteVersion(), especial == null ? null : especial.version())) {
+                throw error(HttpStatus.CONFLICT, "El precio del cliente cambió: consultá sus precios");
+            }
+            if (especial != null && especial.activo()) precioCliente = especial.precio();
             precio = producto.precio();
-            subtotal = precio.multiply(BigDecimal.valueOf(item.entregados()));
+            origen = "GENERAL";
+            if (precioCliente != null) { precio = precioCliente; origen = "CLIENTE"; }
+            if (item.precioExcepcional() != null) { precio = item.precioExcepcional(); origen = "EXCEPCIONAL"; }
+            if (facturados == 0) { precio = BigDecimal.ZERO; origen = "ABONO"; }
+            if (precio == null) throw error(HttpStatus.CONFLICT, "Precio sin configurar para los bidones facturados: " + producto.codigo());
+            subtotal = precio.multiply(BigDecimal.valueOf(facturados));
         }
 
         jdbc.update("INSERT INTO envases_cliente (cliente_id, producto_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
@@ -139,10 +159,14 @@ public class EntregaService {
         jdbc.update("""
                 INSERT INTO detalles_entrega
                     (entrega_id, producto_id, entregados, devueltos_vacios, devueltos_danados,
-                     precio_version, precio_unitario, subtotal, envases_resultantes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     precio_version, precio_unitario, subtotal, envases_resultantes,
+                     incluidos_abono, precio_general, precio_cliente, precio_cliente_version,
+                     precio_excepcional, motivo_precio, origen_precio)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, entregaId, item.productoId(), item.entregados(), item.devueltosVacios(), item.devueltosDanados(),
-                item.precioVersion(), precio, subtotal, envases.getFirst());
+                item.precioVersion(), precio, subtotal, envases.getFirst(), incluidos,
+                item.entregados() > 0 ? producto.precio() : null, precioCliente, item.precioClienteVersion(),
+                item.precioExcepcional(), normalizar(item.motivoPrecio()), origen);
         return subtotal;
     }
 
@@ -173,8 +197,12 @@ public class EntregaService {
 
     private List<CrearEntregaRequest.Item> validarYOrdenar(CrearEntregaRequest request) {
         if (request == null || request.operacionId() == null || request.clienteId() == null
-                || request.items() == null || request.items().isEmpty() || request.items().size() > 100) {
-            throw error(HttpStatus.BAD_REQUEST, "Se requiere operación, cliente y entre 1 y 100 productos");
+                || request.items() == null || (request.items().isEmpty() && request.abono() == null) || request.items().size() > 100) {
+            throw error(HttpStatus.BAD_REQUEST, "Se requiere operación, cliente y productos o un abono");
+        }
+        if (request.abono() != null && (request.abono().planId() == null || request.abono().periodo() == null
+                || request.abono().planVersion() == null || request.abono().planVersion() < 0)) {
+            throw error(HttpStatus.BAD_REQUEST, "Datos de abono inválidos");
         }
         var ids = new HashSet<UUID>();
         for (var item : request.items()) {
@@ -190,6 +218,17 @@ public class EntregaService {
             if (item.entregados() == 0 && item.precioVersion() != null) {
                 throw error(HttpStatus.BAD_REQUEST, "Una devolución sin entrega no requiere precioVersion");
             }
+            if (item.precioClienteVersion() != null && item.precioClienteVersion() < 0)
+                throw error(HttpStatus.BAD_REQUEST, "Versión de precio cliente inválida");
+            if (item.entregados() == 0 && (item.precioClienteVersion() != null || item.precioExcepcional() != null || normalizar(item.motivoPrecio()) != null))
+                throw error(HttpStatus.BAD_REQUEST, "Una devolución sin entrega no lleva datos de precio");
+            if ((item.precioExcepcional() != null) != (normalizar(item.motivoPrecio()) != null))
+                throw error(HttpStatus.BAD_REQUEST, "El precio excepcional requiere un motivo y viceversa");
+            if (item.precioExcepcional() != null && (item.precioExcepcional().signum() < 0 || item.precioExcepcional().scale() > 2
+                    || item.precioExcepcional().compareTo(new BigDecimal("9999999999.99")) > 0))
+                throw error(HttpStatus.BAD_REQUEST, "Precio excepcional inválido");
+            if (item.motivoPrecio() != null && item.motivoPrecio().length() > 500)
+                throw error(HttpStatus.BAD_REQUEST, "Motivo demasiado largo");
             if (!ids.add(item.productoId())) throw error(HttpStatus.BAD_REQUEST, "Producto repetido");
         }
         return request.items().stream().sorted(Comparator.comparing(item -> item.productoId().toString())).toList();
@@ -200,36 +239,53 @@ public class EntregaService {
                 SELECT id, jornada_id, cliente_id, usuario_id, total, saldo_cliente, creado_en FROM entregas WHERE id = ?
                 """, (rs, fila) -> new EntregaResponse(rs.getObject("id", UUID.class), rs.getObject("jornada_id", UUID.class),
                 rs.getObject("cliente_id", UUID.class), rs.getObject("usuario_id", UUID.class), rs.getBigDecimal("total"),
-                rs.getBigDecimal("saldo_cliente"), rs.getObject("creado_en", OffsetDateTime.class), List.of()), id);
+                rs.getBigDecimal("saldo_cliente"), rs.getObject("creado_en", OffsetDateTime.class), List.of(), null), id);
         if (filas.isEmpty()) return null;
         var e = filas.getFirst();
         var items = jdbc.query("""
                 SELECT producto_id, entregados, devueltos_vacios, devueltos_danados, precio_version,
-                       precio_unitario, subtotal, envases_resultantes
+                       precio_unitario, subtotal, envases_resultantes, incluidos_abono, precio_general, precio_cliente,
+                       precio_cliente_version, precio_excepcional, motivo_precio, origen_precio
                 FROM detalles_entrega WHERE entrega_id = ? ORDER BY producto_id
                 """, (rs, fila) -> new EntregaResponse.Item(rs.getObject("producto_id", UUID.class), rs.getInt("entregados"),
                 rs.getInt("devueltos_vacios"), rs.getInt("devueltos_danados"), rs.getObject("precio_version", Long.class),
-                rs.getBigDecimal("precio_unitario"), rs.getBigDecimal("subtotal"), rs.getLong("envases_resultantes")), id);
-        return new EntregaResponse(e.id(), e.jornadaId(), e.clienteId(), e.usuarioId(), e.total(), e.saldoCliente(), e.creadoEn(), items);
+                rs.getBigDecimal("precio_unitario"), rs.getBigDecimal("subtotal"), rs.getLong("envases_resultantes"),
+                rs.getInt("incluidos_abono"), rs.getInt("entregados") - rs.getInt("incluidos_abono"),
+                rs.getBigDecimal("precio_general"), rs.getBigDecimal("precio_cliente"), rs.getObject("precio_cliente_version", Long.class),
+                rs.getBigDecimal("precio_excepcional"), rs.getString("motivo_precio"), rs.getString("origen_precio")), id);
+        var cargos = jdbc.query("SELECT * FROM abonos_cliente WHERE entrega_id=?", (rs,n) -> new EntregaResponse.CargoAbono(
+                rs.getObject("id",UUID.class), rs.getObject("plan_id",UUID.class), rs.getString("plan_nombre"),
+                rs.getLong("plan_version"), rs.getObject("periodo",LocalDate.class), rs.getBigDecimal("importe")),id);
+        return new EntregaResponse(e.id(), e.jornadaId(), e.clienteId(), e.usuarioId(), e.total(), e.saldoCliente(), e.creadoEn(), items, cargos.isEmpty() ? null : cargos.getFirst());
     }
 
     private EntregaResponse validarReintento(EntregaResponse e, UUID jornadaId, UUID clienteId, UUID usuarioId,
-                                             List<CrearEntregaRequest.Item> items) {
+                                             List<CrearEntregaRequest.Item> items, AbonoService.Carga abono) {
         if (e == null || !e.jornadaId().equals(jornadaId) || !e.clienteId().equals(clienteId)
                 || !e.usuarioId().equals(usuarioId) || e.items().size() != items.size()) {
             throw error(HttpStatus.CONFLICT, "El identificador de operación ya fue usado con otros datos");
         }
+        if ((e.abono() == null) != (abono == null) || (abono != null &&
+                (!e.abono().planId().equals(abono.planId()) || e.abono().planVersion() != abono.planVersion()
+                || !e.abono().periodo().equals(abono.periodo()))))
+            throw error(HttpStatus.CONFLICT, "El identificador de operación ya fue usado con otro abono");
         for (int i = 0; i < items.size(); i++) {
             var anterior = e.items().get(i);
             var nuevo = items.get(i);
             if (!anterior.productoId().equals(nuevo.productoId()) || anterior.entregados() != nuevo.entregados()
                     || anterior.devueltosVacios() != nuevo.devueltosVacios() || anterior.devueltosDanados() != nuevo.devueltosDanados()
-                    || !Objects.equals(anterior.precioVersion(), nuevo.precioVersion())) {
+                    || !Objects.equals(anterior.precioVersion(), nuevo.precioVersion())
+                    || !Objects.equals(anterior.precioClienteVersion(), nuevo.precioClienteVersion())
+                    || !mismoImporte(anterior.precioExcepcional(), nuevo.precioExcepcional())
+                    || !Objects.equals(anterior.motivoPrecio(), normalizar(nuevo.motivoPrecio()))) {
                 throw error(HttpStatus.CONFLICT, "El identificador de operación ya fue usado con otros datos");
             }
         }
         return e;
     }
+
+    private String normalizar(String s) { return s == null || s.isBlank() ? null : s.strip(); }
+    private boolean mismoImporte(BigDecimal a, BigDecimal b) { return a == null ? b == null : b != null && a.compareTo(b) == 0; }
 
     private Usuario actor(String username) {
         return usuarios.findByUsername(username).filter(Usuario::isActivo)

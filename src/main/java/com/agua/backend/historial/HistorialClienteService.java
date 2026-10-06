@@ -36,6 +36,8 @@ public class HistorialClienteService {
                     e.cliente_id,
                     e.creado_en,
                     CASE
+                        WHEN EXISTS (SELECT 1 FROM abonos_cliente a WHERE a.entrega_id=e.id)
+                            THEN 'ENTREGA_CON_ABONO'
                         WHEN EXISTS (
                             SELECT 1
                             FROM detalles_entrega d

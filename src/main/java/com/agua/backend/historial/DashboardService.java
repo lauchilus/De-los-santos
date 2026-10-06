@@ -25,6 +25,7 @@ public class DashboardService {
     private final ResumenCobrosService cobrosService;
     private final CuentasClientesService cuentasService;
     private final EnvasesClientesService envasesService;
+    private final ResumenAbonosService abonosService;
 
     public record Gastos(
             long cantidadGastos,
@@ -42,13 +43,18 @@ public class DashboardService {
             LocalDate hasta,
             ResumenVentasService.Totales ventas,
             ResumenCobrosService.Totales cobros,
-            Gastos gastos
+            Gastos gastos,
+            ResumenAbonosService.Resumen abonos,
+            BigDecimal totalFacturado
     ) {
     }
 
+    public record MaquinasClientes(long cantidadClientes, BigDecimal cantidadMaquinas) {}
+
     public record Actuales(
             CuentasClientesService.Totales cuentasClientes,
-            EnvasesClientesService.Totales envasesClientes
+            EnvasesClientesService.Totales envasesClientes,
+            MaquinasClientes maquinasClientes
     ) {
     }
 
@@ -76,6 +82,8 @@ public class DashboardService {
         var ventas = ventasService.consultar(
                 desde, hasta, null, null, null
         );
+
+        var abonos = abonosService.consultar(desde, hasta);
 
         var cobros = cobrosService.consultar(
                 desde, hasta, null, null
@@ -133,17 +141,25 @@ public class DashboardService {
                 null, null, null, 0, 1
         );
 
+        var maquinas = jdbc.queryForObject("""
+                SELECT COUNT(DISTINCT cliente_id) AS clientes, COALESCE(SUM(cantidad),0) AS maquinas
+                FROM maquinas_cliente WHERE cantidad > 0
+                """, (rs,n) -> new MaquinasClientes(rs.getLong("clientes"),rs.getBigDecimal("maquinas")));
+
         return new Resumen(
                 new Periodo(
                         desde,
                         hasta,
                         ventas.totales(),
                         cobros.totales(),
-                        gastos
+                        gastos,
+                        abonos,
+                        ventas.totales().importeVendido().add(abonos.importeAbonos())
                 ),
                 new Actuales(
                         cuentas.totales(),
-                        envases.totales()
+                        envases.totales(),
+                        maquinas
                 )
         );
     }

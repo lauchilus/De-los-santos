@@ -43,7 +43,9 @@ public class ResumenVentasService {
             BigDecimal unidadesEntregadas,
             BigDecimal devueltosVacios,
             BigDecimal devueltosDanados,
-            BigDecimal importeVendido
+            BigDecimal importeVendido,
+            BigDecimal unidadesIncluidasAbono,
+            BigDecimal unidadesFacturadas
     ) {
     }
 
@@ -56,7 +58,9 @@ public class ResumenVentasService {
             BigDecimal unidadesEntregadas,
             BigDecimal devueltosVacios,
             BigDecimal devueltosDanados,
-            BigDecimal importeVendido
+            BigDecimal importeVendido,
+            BigDecimal unidadesIncluidasAbono,
+            BigDecimal unidadesFacturadas
     ) {
     }
 
@@ -123,7 +127,9 @@ public class ResumenVentasService {
                     COALESCE(SUM(d.entregados), 0) AS entregados,
                     COALESCE(SUM(d.devueltos_vacios), 0) AS vacios,
                     COALESCE(SUM(d.devueltos_danados), 0) AS danados,
-                    COALESCE(SUM(d.subtotal), 0) AS vendido
+                    COALESCE(SUM(d.subtotal), 0) AS vendido,
+                    COALESCE(SUM(d.incluidos_abono), 0) AS incluidos,
+                    COALESCE(SUM(d.entregados-d.incluidos_abono), 0) AS facturados
                 """ + filtro,
                 (rs, rowNum) -> new Totales(
                         rs.getLong("operaciones"),
@@ -131,7 +137,9 @@ public class ResumenVentasService {
                         rs.getBigDecimal("entregados"),
                         rs.getBigDecimal("vacios"),
                         rs.getBigDecimal("danados"),
-                        rs.getBigDecimal("vendido")
+                        rs.getBigDecimal("vendido"),
+                        rs.getBigDecimal("incluidos"),
+                        rs.getBigDecimal("facturados")
                 ),
                 parametros.toArray()
         );
@@ -147,7 +155,9 @@ public class ResumenVentasService {
                     COALESCE(SUM(d.entregados), 0) AS entregados,
                     COALESCE(SUM(d.devueltos_vacios), 0) AS vacios,
                     COALESCE(SUM(d.devueltos_danados), 0) AS danados,
-                    COALESCE(SUM(d.subtotal), 0) AS vendido
+                    COALESCE(SUM(d.subtotal), 0) AS vendido,
+                    COALESCE(SUM(d.incluidos_abono), 0) AS incluidos,
+                    COALESCE(SUM(d.entregados-d.incluidos_abono), 0) AS facturados
                 """ + filtro + """
                 GROUP BY p.id, p.codigo, p.nombre
                 ORDER BY p.codigo ASC, p.id ASC
@@ -161,7 +171,9 @@ public class ResumenVentasService {
                         rs.getBigDecimal("entregados"),
                         rs.getBigDecimal("vacios"),
                         rs.getBigDecimal("danados"),
-                        rs.getBigDecimal("vendido")
+                        rs.getBigDecimal("vendido"),
+                        rs.getBigDecimal("incluidos"),
+                        rs.getBigDecimal("facturados")
                 ),
                 parametros.toArray()
         );
