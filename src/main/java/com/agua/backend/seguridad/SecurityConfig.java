@@ -150,6 +150,7 @@ public class SecurityConfig {
 
                         .requestMatchers(HttpMethod.GET,
                                 "/api/v1/planes-abono",
+                                "/api/v1/jornadas/*/datos-offline",
                                 "/api/v1/jornadas/*/maquinas/*")
                         .hasAnyRole("ADMIN", "REPARTIDOR")
                         .requestMatchers(HttpMethod.POST, "/api/v1/jornadas/*/maquinas",
