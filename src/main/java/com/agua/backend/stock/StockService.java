@@ -56,6 +56,33 @@ public class StockService {
             );
         }
 
+        var usuario = usuarioRepository.findByUsername(username)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.UNAUTHORIZED,
+                        "Usuario no encontrado"
+                ));
+
+        UUID movimientoId = request.operacionId() == null ? UUID.randomUUID() : request.operacionId();
+        // Serializa reintentos del mismo identificador antes de descontar stock.
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", rs -> { }, movimientoId.toString());
+        var anteriores = jdbc.query("""
+                SELECT id, producto_id, estado, cantidad, saldo_resultante, motivo, usuario_id, tipo
+                FROM movimientos_stock_fabrica WHERE id = ?
+                """, (rs, n) -> {
+                    if (!"AJUSTE".equals(rs.getString("tipo"))) throw new ResponseStatusException(HttpStatus.CONFLICT, "Identificador utilizado");
+                    return new MovimientoStockResponse(rs.getObject("id", UUID.class), rs.getObject("producto_id", UUID.class),
+                        EstadoStock.valueOf(rs.getString("estado")), rs.getLong("cantidad"), rs.getLong("saldo_resultante"),
+                        rs.getString("motivo"), rs.getObject("usuario_id", UUID.class));
+                }, movimientoId);
+        if (!anteriores.isEmpty()) {
+            var anterior = anteriores.getFirst();
+            if (!anterior.productoId().equals(request.productoId()) || anterior.estado() != request.estado()
+                || anterior.cantidad() != request.cantidad() || !anterior.motivo().equals(request.motivo().strip())
+                || !anterior.usuarioId().equals(usuario.getId()))
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Identificador utilizado con otros datos");
+            return anterior;
+        }
+
         var producto = productoRepository.findById(request.productoId())
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
@@ -78,12 +105,6 @@ public class StockService {
                     "El estado no corresponde al tipo de producto"
             );
         }
-
-        var usuario = usuarioRepository.findByUsername(username)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.UNAUTHORIZED,
-                        "Usuario no encontrado"
-                ));
 
         long variacion = request.cantidad().longValue();
 
@@ -110,7 +131,6 @@ public class StockService {
             );
         }
 
-        UUID movimientoId = UUID.randomUUID();
         long saldo = saldos.getFirst();
         String motivo = request.motivo().strip();
 
