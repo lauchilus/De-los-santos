@@ -62,6 +62,9 @@ public class SecurityConfig {
                                 "/api/v1/clientes/**"
                         ).hasAnyRole("ADMIN", "REPARTIDOR")
 
+                        .requestMatchers(HttpMethod.POST, "/api/v1/clientes/gestion").hasAnyRole("ADMIN", "REPARTIDOR")
+                        .requestMatchers(HttpMethod.PUT, "/api/v1/clientes/gestion/*").hasAnyRole("ADMIN", "REPARTIDOR")
+
                         .requestMatchers(
                                 HttpMethod.POST,
                                 "/api/v1/clientes"
