@@ -55,6 +55,12 @@ public class ProduccionService {
             );
         }
 
+        Integer capacidad = producto.getCapacidadLitros();
+        if (capacidad == null || (capacidad != 12 && capacidad != 20)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No hay bolsa configurada para esta capacidad");
+        }
+        String codigoBolsa = "BOLSA_" + capacidad;
+
         // La PK evita duplicar una operación, incluso con dos pedidos simultáneos.
         int insertados = jdbc.update("""
                 INSERT INTO producciones (
@@ -92,7 +98,7 @@ public class ProduccionService {
                 FROM stock_fabrica s
                 JOIN productos p ON p.id = s.producto_id
                 WHERE p.id = ?
-                   OR p.codigo IN ('TAPA', 'BOLSA')
+                   OR p.codigo IN ('TAPA', ?)
                 ORDER BY s.producto_id, s.estado
                 FOR UPDATE OF s
                 """,
@@ -104,7 +110,7 @@ public class ProduccionService {
                         rs.getString("estado"),
                         rs.getLong("cantidad")
                 ),
-                request.productoId()
+                request.productoId(), codigoBolsa
         );
 
         Existencia vacios = buscarBidon(
@@ -114,7 +120,7 @@ public class ProduccionService {
                 existencias, request.productoId(), "LLENO"
         );
         Existencia tapas = buscarInsumo(existencias, "TAPA");
-        Existencia bolsas = buscarInsumo(existencias, "BOLSA");
+        Existencia bolsas = buscarInsumo(existencias, codigoBolsa);
 
         long cantidad = request.cantidad().longValue();
 

@@ -122,6 +122,9 @@ public class CargaService {
         if (!producto.activo()) {
             throw error(HttpStatus.CONFLICT, "Producto inactivo: " + producto.codigo());
         }
+        if (!java.util.Set.of("BIDON", "MAQUINA", "COPA").contains(producto.tipo())) {
+            throw error(HttpStatus.BAD_REQUEST, "Solo se pueden cargar bidones, máquinas y copas");
+        }
         String estado = "BIDON".equals(producto.tipo()) ? "LLENO" : "DISPONIBLE";
         long cantidad = item.cantidad().longValue();
         var saldos = jdbc.query("""
