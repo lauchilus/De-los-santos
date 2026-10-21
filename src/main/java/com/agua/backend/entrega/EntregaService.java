@@ -115,10 +115,14 @@ public class EntregaService {
                 rs.getBoolean("activo"), rs.getBigDecimal("precio_venta"), rs.getLong("version")), item.productoId());
         if (productos.isEmpty()) throw error(HttpStatus.NOT_FOUND, "Producto no encontrado: " + item.productoId());
         var producto = productos.getFirst();
-        if (!"BIDON".equals(producto.tipo())) throw error(HttpStatus.BAD_REQUEST, "Esta operación admite solo bidones");
+        boolean retornable = "BIDON".equals(producto.tipo());
+        if (!retornable && !"COPA".equals(producto.tipo()))
+            throw error(HttpStatus.BAD_REQUEST, "Esta operación admite solo bidones y copas");
+        if (!retornable && (item.devueltosVacios() != 0 || item.devueltosDanados() != 0))
+            throw error(HttpStatus.BAD_REQUEST, "Las copas no admiten devolución de envases");
         if (!producto.activo()) throw error(HttpStatus.CONFLICT, "Producto inactivo: " + producto.codigo());
 
-        int incluidos = abonos.consumir(entregaId, clienteId, item.productoId(), item.entregados(), hoy);
+        int incluidos = retornable ? abonos.consumir(entregaId, clienteId, item.productoId(), item.entregados(), hoy) : 0;
         int facturados = item.entregados() - incluidos;
         BigDecimal precio = null;
         BigDecimal precioCliente = null;
@@ -138,24 +142,29 @@ public class EntregaService {
             if (precioCliente != null) { precio = precioCliente; origen = "CLIENTE"; }
             if (item.precioExcepcional() != null) { precio = item.precioExcepcional(); origen = "EXCEPCIONAL"; }
             if (facturados == 0) { precio = BigDecimal.ZERO; origen = "ABONO"; }
-            if (precio == null) throw error(HttpStatus.CONFLICT, "Precio sin configurar para los bidones facturados: " + producto.codigo());
+            if (precio == null) throw error(HttpStatus.CONFLICT, "Precio sin configurar para los productos entregados: " + producto.codigo());
             subtotal = precio.multiply(BigDecimal.valueOf(facturados));
         }
 
-        jdbc.update("INSERT INTO envases_cliente (cliente_id, producto_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
-                clienteId, item.productoId());
-        long variacion = item.entregados().longValue() - item.devueltosVacios().longValue() - item.devueltosDanados().longValue();
-        var envases = jdbc.query("""
-                UPDATE envases_cliente SET cantidad = cantidad + ?, actualizado_en = CURRENT_TIMESTAMP
-                WHERE cliente_id = ? AND producto_id = ? AND cantidad + ? >= 0 RETURNING cantidad
-                """, (rs, fila) -> rs.getLong("cantidad"), variacion, clienteId, item.productoId(), variacion);
-        if (envases.isEmpty()) {
-            throw error(HttpStatus.CONFLICT, "La devolución supera los envases registrados del cliente: " + producto.codigo());
+        long envasesResultantes = 0;
+        if (retornable) {
+            jdbc.update("INSERT INTO envases_cliente (cliente_id, producto_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                    clienteId, item.productoId());
+            long variacion = item.entregados().longValue() - item.devueltosVacios().longValue() - item.devueltosDanados().longValue();
+            var envases = jdbc.query("""
+                    UPDATE envases_cliente SET cantidad = cantidad + ?, actualizado_en = CURRENT_TIMESTAMP
+                    WHERE cliente_id = ? AND producto_id = ? AND cantidad + ? >= 0 RETURNING cantidad
+                    """, (rs, fila) -> rs.getLong("cantidad"), variacion, clienteId, item.productoId(), variacion);
+            if (envases.isEmpty()) {
+                throw error(HttpStatus.CONFLICT, "La devolución supera los envases registrados del cliente: " + producto.codigo());
+            }
+            envasesResultantes = envases.getFirst();
         }
-
-        moverStock(entregaId, jornadaId, item.productoId(), "LLENO", -item.entregados().longValue());
-        moverStock(entregaId, jornadaId, item.productoId(), "VACIO", item.devueltosVacios().longValue());
-        moverStock(entregaId, jornadaId, item.productoId(), "DANADO", item.devueltosDanados().longValue());
+        moverStock(entregaId, jornadaId, item.productoId(), retornable ? "LLENO" : "DISPONIBLE", -item.entregados().longValue());
+        if (retornable) {
+            moverStock(entregaId, jornadaId, item.productoId(), "VACIO", item.devueltosVacios().longValue());
+            moverStock(entregaId, jornadaId, item.productoId(), "DANADO", item.devueltosDanados().longValue());
+        }
         jdbc.update("""
                 INSERT INTO detalles_entrega
                     (entrega_id, producto_id, entregados, devueltos_vacios, devueltos_danados,
@@ -164,7 +173,7 @@ public class EntregaService {
                      precio_excepcional, motivo_precio, origen_precio)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, entregaId, item.productoId(), item.entregados(), item.devueltosVacios(), item.devueltosDanados(),
-                item.precioVersion(), precio, subtotal, envases.getFirst(), incluidos,
+                item.precioVersion(), precio, subtotal, envasesResultantes, incluidos,
                 item.entregados() > 0 ? producto.precio() : null, precioCliente, item.precioClienteVersion(),
                 item.precioExcepcional(), normalizar(item.motivoPrecio()), origen);
         return subtotal;
@@ -213,7 +222,7 @@ public class EntregaService {
                 throw error(HttpStatus.BAD_REQUEST, "Cada producto debe tener entrega o devolución");
             }
             if (item.entregados() > 0 && (item.precioVersion() == null || item.precioVersion() < 0)) {
-                throw error(HttpStatus.BAD_REQUEST, "Indicá la versión del precio para los bidones entregados");
+                throw error(HttpStatus.BAD_REQUEST, "Indicá la versión del precio para los productos entregados");
             }
             if (item.entregados() == 0 && item.precioVersion() != null) {
                 throw error(HttpStatus.BAD_REQUEST, "Una devolución sin entrega no requiere precioVersion");
