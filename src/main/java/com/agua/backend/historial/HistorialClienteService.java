@@ -63,6 +63,12 @@ public class HistorialClienteService {
                     c.saldo_cliente AS saldo_resultante
                 FROM cobros c
                 WHERE c.cliente_id = ?
+                UNION ALL
+                SELECT i.cliente_id, NULL::uuid, i.cliente_id,
+                       (imp.fecha_corte::timestamp AT TIME ZONE 'America/Argentina/Buenos_Aires'),
+                       'SALDO_INICIAL', i.saldo_inicial, i.saldo_inicial
+                FROM clientes_importados i JOIN importaciones_clientes imp ON imp.id=i.importacion_id
+                WHERE i.cliente_id = ?
             )
             """;
 
@@ -157,6 +163,7 @@ public class HistorialClienteService {
                 Long.class,
                 clienteId,
                 clienteId,
+                clienteId,
                 inicio,
                 finExclusivo
         );
@@ -179,6 +186,7 @@ public class HistorialClienteService {
                         rs.getBigDecimal("importe"),
                         rs.getBigDecimal("saldo_resultante")
                 ),
+                clienteId,
                 clienteId,
                 clienteId,
                 inicio,
