@@ -1,0 +1,8 @@
+**
+!pom.xml
+!src/
+!src/**
+!Dockerfile
+!src/main/resources/
+src/main/resources/application-local.*
+src/main/resources/application-dev.*

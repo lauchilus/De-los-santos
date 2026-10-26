@@ -5,7 +5,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
-import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -39,6 +38,12 @@ public class SecurityConfig {
                 .authenticationProvider(provider)
                 .authorizeHttpRequests(auth -> auth
                         .dispatcherTypeMatchers(DispatcherType.ERROR)
+                        .permitAll()
+
+                        // Solo el shell publico; las rutas de API conservan sus permisos.
+                        .requestMatchers(HttpMethod.GET, "/", "/index.html", "/assets/**",
+                                "/sw.js", "/manifest.webmanifest", "/favicon.ico",
+                                "/icon-192.png", "/icon-512.png", "/santos-icon.svg", "/santos-logo.png")
                         .permitAll()
 
                         .requestMatchers(
@@ -164,7 +169,12 @@ public class SecurityConfig {
 
                         .anyRequest().denyAll()
                 )
-                .httpBasic(Customizer.withDefaults());
+                // El formulario gestiona el 401, sin abrir el dialogo Basic del navegador.
+                .httpBasic(basic -> basic.authenticationEntryPoint((request, response, exception) -> {
+                    response.setStatus(401);
+                    response.setContentType("application/json;charset=UTF-8");
+                    response.getWriter().write("{\"mensaje\":\"Autenticacion requerida o credenciales invalidas\"}");
+                }));
 
         return http.build();
     }

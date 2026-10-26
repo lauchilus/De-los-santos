@@ -1,0 +1,38 @@
+server:
+  address: 0.0.0.0
+  port: ${PORT:10000}
+  forward-headers-strategy: framework
+  servlet:
+    session:
+      cookie:
+        secure: true
+        http-only: true
+        same-site: lax
+  tomcat:
+    threads:
+      max: 30
+      min-spare: 2
+
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 4
+      minimum-idle: 0
+      idle-timeout: 60000
+      connection-timeout: 30000
+      max-lifetime: 600000
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          no-cache: true
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
