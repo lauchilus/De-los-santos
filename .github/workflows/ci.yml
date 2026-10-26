@@ -1,0 +1,88 @@
+name: Verificar aplicacion
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verificar:
+    name: Aplicacion completa
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: agua_ci
+          POSTGRES_USER: agua_ci
+          POSTGRES_PASSWORD: ci_only_not_production
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U agua_ci -d agua_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DB_URL: jdbc:postgresql://localhost:5432/agua_ci
+      DB_USERNAME: agua_ci
+      DB_PASSWORD: ci_only_not_production
+      APP_ADMIN_PASSWORD: CiOnlyPassword_123456
+      AGUA_TEST_DB_URL: jdbc:postgresql://localhost:5432/agua_ci
+      AGUA_TEST_DB_USER: agua_ci
+      AGUA_TEST_DB_PASSWORD: ci_only_not_production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Obtener version exacta del frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="$(tr -d '\r\n' < frontend.ref)"
+          [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || { echo 'frontend.ref debe contener un SHA completo'; exit 1; }
+          git init /tmp/agua-frontend-ci
+          git -C /tmp/agua-frontend-ci remote add origin https://github.com/lauchilus/agua-frontend.git
+          git -C /tmp/agua-frontend-ci fetch --depth 1 origin "$ref"
+          git -C /tmp/agua-frontend-ci checkout --detach FETCH_HEAD
+          echo "Frontend: $ref" >> "$GITHUB_STEP_SUMMARY"
+          echo "Backend: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Pruebas del frontend integrado
+        working-directory: /tmp/agua-frontend-ci
+        run: npm ci && npm test
+      - name: Pruebas y paquete Java con PostgreSQL aislado
+        run: sh mvnw -B -ntp clean verify
+      - name: Verificar imagen de produccion
+        run: docker build --tag agua-ci .
+      - name: Arranque y login de la imagen
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name agua-smoke --network host --memory 512m --memory-swap 512m \
+            -e DB_URL -e DB_USERNAME -e DB_PASSWORD -e APP_ADMIN_PASSWORD -e PORT=10000 agua-ci
+          python3 scripts/smoke.py
+      - name: Logs de arranque
+        if: failure()
+        run: docker logs agua-smoke 2>&1 || true
+      - name: Detener contenedor de prueba
+        if: always()
+        run: docker rm -f agua-smoke >/dev/null 2>&1 || true
+      - name: Guardar resultados de pruebas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resultados-backend
+          path: target/surefire-reports/
+          retention-days: 7
+          if-no-files-found: ignore

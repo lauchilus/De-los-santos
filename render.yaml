@@ -5,6 +5,7 @@ services:
     plan: free
     region: virginia
     branch: main
+    autoDeployTrigger: checksPass
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /actuator/health/liveness

@@ -2,9 +2,11 @@
 FROM node:22-bookworm-slim AS frontend
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /frontend
-# Version exacta del frontend publico: actualizar este SHA para publicar otra UI.
-ARG FRONTEND_REF=a58a5188e448358675e19bd5b56a46e943d72dbf
-RUN git init && git remote add origin https://github.com/lauchilus/agua-frontend.git \
+# Version exacta actualizada por el CI del frontend.
+COPY frontend.ref /tmp/frontend.ref
+RUN FRONTEND_REF="$(tr -d '\r\n' < /tmp/frontend.ref)" \
+    && test "${#FRONTEND_REF}" -eq 40 \
+    && git init && git remote add origin https://github.com/lauchilus/agua-frontend.git \
     && git fetch --depth 1 origin "$FRONTEND_REF" && git checkout --detach FETCH_HEAD
 RUN npm ci && npm run build
 

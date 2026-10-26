@@ -6,3 +6,5 @@
 !src/main/resources/
 src/main/resources/application-local.*
 src/main/resources/application-dev.*
+
+!frontend.ref
